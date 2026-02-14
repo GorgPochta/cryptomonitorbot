@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
@@ -27,6 +28,22 @@ logging.basicConfig(
 # Хранилище данных
 user_data = {}
 active_monitors = {}
+
+# ===== ФУНКЦИЯ СБРОСА НАКОПЛЕННЫХ СООБЩЕНИЙ =====
+async def clear_pending_updates(application):
+    """Сбрасывает все накопленные сообщения при запуске"""
+    try:
+        # Получаем все ожидающие обновления и сразу их подтверждаем
+        updates = await application.bot.get_updates()
+        if updates:
+            # Берем самый большой update_id и добавляем 1
+            max_update_id = max(update.update_id for update in updates)
+            await application.bot.get_updates(offset=max_update_id + 1)
+            print(f"✅ Сброшено {len(updates)} накопленных сообщений")
+        else:
+            print("✅ Нет накопленных сообщений")
+    except Exception as e:
+        print(f"❌ Ошибка при сбросе сообщений: {e}")
 
 # ===== КЛАСС МОНИТОРИНГА =====
 class PriceMonitor:
@@ -106,6 +123,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
     
+    print(f"✅ Получена команда /start от {user.first_name} (ID: {chat_id})")
+    
     # Клавиатура
     keyboard = [
         [InlineKeyboardButton("📊 Добавить пару", callback_data='add_pair')],
@@ -124,12 +143,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех кнопок"""
+    """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
     
     chat_id = update.effective_chat.id
-    print(f"Нажата кнопка: {query.data}")  # Отладка
+    print(f"🔘 Нажата кнопка: {query.data} от пользователя {chat_id}")
     
     if query.data == 'add_pair':
         await query.edit_message_text(
@@ -139,8 +158,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SYMBOL1
     
     elif query.data == 'list_pairs':
-        text = "📋 Список пар будет здесь"
-        await query.edit_message_text(text)
+        await query.edit_message_text("📋 Список пар появится позже")
     
     elif query.data == 'stop_all':
         await query.edit_message_text("⏹ Все мониторы остановлены")
@@ -269,14 +287,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено")
     return ConversationHandler.END
 
+async def post_init(application):
+    """Выполняется после инициализации бота"""
+    print("🔄 Сброс накопленных сообщений...")
+    await clear_pending_updates(application)
+    print("✅ Бот готов к работе!")
+
 def main():
     """Запуск бота"""
     print("🚀 Запуск бота...")
     
-    # Создаем приложение
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Создаем приложение с post_init
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
-    # Добавляем обработчик команды start
+    # Добавляем обработчики
     app.add_handler(CommandHandler("start", start))
     
     # ConversationHandler для добавления пары
@@ -294,10 +318,10 @@ def main():
     )
     app.add_handler(conv_handler)
     
-    # Обработчик остальных кнопок (кроме add_pair)
+    # Обработчик остальных кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    print("✅ Бот запущен и готов к работе!")
+    print("✅ Бот запущен и ждет сообщений...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
