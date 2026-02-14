@@ -308,16 +308,15 @@ async def interval_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         interval = int(update.message.text.strip())
         context.user_data['interval'] = interval
         
-        # Спрашиваем, куда отправлять уведомления
+        # Спрашиваем, куда отправлять уведомления (ТОЛЬКО СЕБЕ ИЛИ ДРУГОЙ)
         keyboard = [
             [InlineKeyboardButton("👤 Себе", callback_data='receiver_self')],
-            [InlineKeyboardButton("📱 Другой пользователь", callback_data='receiver_other')],
-            [InlineKeyboardButton("👥 Группа", callback_data='receiver_group')]
+            [InlineKeyboardButton("📱 Другой пользователь", callback_data='receiver_other')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "✅ Шаг 4/5 - интервал принят!\n\n"
+            "✅ Шаг 4/4 - интервал принят!\n\n"
             "📨 <b>Куда отправлять уведомления?</b>\n"
             "Выбери вариант:",
             reply_markup=reply_markup,
@@ -340,16 +339,16 @@ async def receiver_type_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if query.data == 'receiver_self':
         # Отправляем себе
         context.user_data['receiver_id'] = chat_id
+        await query.message.reply_text("✅ Получатель: себе\n\n⏳ Запускаю мониторинг...")
         await finalize_monitor(update, context)
         return ConversationHandler.END
     
-    elif query.data in ['receiver_other', 'receiver_group']:
+    elif query.data == 'receiver_other':
         context.user_data['receiver_type'] = query.data
-        await query.edit_message_text(
+        await query.message.reply_text(
             "📝 Введи <b>Chat ID</b> получателя:\n\n"
-            "• Для пользователя: найди его Chat ID через @userinfobot\n"
-            "• Для группы: добавь бота в группу и найди Chat ID в логах\n\n"
-            "Пример: <code>123456789</code>",
+            "• Найди Chat ID через @userinfobot\n"
+            "• Пример: <code>123456789</code>",
             parse_mode='HTML'
         )
         return RECEIVER_ID
