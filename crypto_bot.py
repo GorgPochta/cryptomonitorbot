@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 
 # Состояния для разговора
-(SYMBOL1, SYMBOL2, THRESHOLD, INTERVAL) = range(4)
+(SYMBOL1, SYMBOL2, THRESHOLD, INTERVAL, RECEIVER_TYPE, RECEIVER_ID) = range(6)
 
 # Токен бота
 BOT_TOKEN = os.getenv("BOT_TOKEN", "6566243038:AAE6iVBUqPyF5P3924dMrDp8cRcwwcUivZs")
@@ -47,8 +47,9 @@ user_data = load_user_data()
 
 # ===== КЛАСС МОНИТОРИНГА =====
 class PriceMonitor:
-    def __init__(self, chat_id, symbol1, symbol2, threshold, interval, bot_app):
-        self.chat_id = chat_id
+    def __init__(self, owner_id, receiver_id, symbol1, symbol2, threshold, interval, bot_app):
+        self.owner_id = owner_id  # кто создал
+        self.receiver_id = receiver_id  # кому отправлять
         self.symbol1 = symbol1.lower()
         self.symbol2 = symbol2.lower()
         self.threshold = threshold
@@ -74,15 +75,27 @@ class PriceMonitor:
         return None
     
     async def send_message(self, text):
-        """Отправляет сообщение пользователю"""
+        """Отправляет сообщение получателю"""
         try:
             await self.bot_app.bot.send_message(
-                chat_id=self.chat_id,
+                chat_id=self.receiver_id,
                 text=text,
                 parse_mode='HTML'
             )
+            # Также отправляем копию создателю (для информации)
+            if self.receiver_id != self.owner_id:
+                await self.bot_app.bot.send_message(
+                    chat_id=self.owner_id,
+                    text=f"📨 Уведомление отправлено получателю {self.receiver_id}\n\n{text}",
+                    parse_mode='HTML'
+                )
         except Exception as e:
-            print(f"Ошибка отправки: {e}")
+            # Если не удалось отправить получателю - шлём создателю
+            await self.bot_app.bot.send_message(
+                chat_id=self.owner_id,
+                text=f"❌ Не удалось отправить уведомление получателю {self.receiver_id}. Ошибка: {e}\n\nСигнал: {text}",
+                parse_mode='HTML'
+            )
     
     async def check_ratio(self):
         """Проверяет отношение"""
@@ -96,15 +109,6 @@ class PriceMonitor:
             ratio = price1 / price2
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            # Показываем текущее отношение раз в 10 минут
-            if time.time() - self.last_notification > 600:
-                await self.send_message(
-                    f"📊 <b>{self.symbol1.upper()}/{self.symbol2.upper()}</b>\n"
-                    f"Текущее отношение: {ratio:.6f}\n"
-                    f"Порог: {self.threshold}"
-                )
-                self.last_notification = time.time()
-            
             # Проверяем сигнал
             if ratio >= self.threshold:
                 signal_msg = (
@@ -112,7 +116,8 @@ class PriceMonitor:
                     f"<b>Пара:</b> {self.symbol1.upper()}/{self.symbol2.upper()}\n"
                     f"<b>Отношение:</b> {ratio:.6f}\n"
                     f"<b>Порог:</b> {self.threshold}\n"
-                    f"<b>Время:</b> {current_time}"
+                    f"<b>Время:</b> {current_time}\n"
+                    f"<b>Мониторинг создан:</b> @{self.owner_id}"
                 )
                 await self.send_message(signal_msg)
                 self.last_notification = time.time()
@@ -161,7 +166,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n\n"
         f"Я бот для мониторинга криптопар на Bybit.\n"
-        f"Ты можешь настроить отслеживание отношения двух активов.\n\n"
+        f"Ты можешь настроить отслеживание отношения двух активов.\n"
+        f"Уведомления можно отправлять себе или другому пользователю.\n\n"
         f"Твой Chat ID: <code>{chat_id}</code>",
         reply_markup=reply_markup,
         parse_mode='HTML'
@@ -176,7 +182,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == 'add_pair':
         await query.edit_message_text(
-            "📝 <b>Добавление пары</b>\n\n"
+            "📝 <b>Добавление пары - шаг 1/5</b>\n\n"
             "Введи <b>первый тикер</b> (числитель):\n"
             "Например: <code>paxgusdt</code>",
             parse_mode='HTML'
@@ -188,7 +194,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = "📋 <b>Твои пары:</b>\n\n"
             for i, mon in enumerate(user_data[str(chat_id)]['monitors'], 1):
                 text += f"{i}. {mon['symbol1'].upper()}/{mon['symbol2'].upper()}\n"
-                text += f"   Порог: {mon['threshold']}, интервал: {mon['interval']}с\n\n"
+                text += f"   Порог: {mon['threshold']}, интервал: {mon['interval']}с\n"
+                text += f"   Получатель: <code>{mon['receiver_id']}</code>\n\n"
             
             keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -226,8 +233,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "2. Введи первый тикер (например paxgusdt)\n"
             "3. Введи второй тикер (например xautusdt)\n"
             "4. Введи пороговое отношение (например 1.0048)\n"
-            "5. Введи интервал проверки в секундах\n\n"
-            "Бот будет проверять каждые N секунд и пришлет сигнал при достижении порога."
+            "5. Введи интервал проверки в секундах\n"
+            "6. Выбери, куда отправлять уведомления:\n"
+            "   • Себе (текущий чат)\n"
+            "   • Другой пользователь (введи Chat ID)\n"
+            "   • Группа (введи Chat ID группы)\n\n"
+            "Бот будет проверять каждые N секунд и пришлет сигнал указанному получателю."
         )
         await query.edit_message_text(
             help_text,
@@ -255,7 +266,7 @@ async def symbol1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получаем первый тикер"""
     context.user_data['symbol1'] = update.message.text.strip().lower()
     await update.message.reply_text(
-        "✅ Принято!\n\n"
+        "✅ Шаг 1/5 - первый тикер принят!\n\n"
         "Теперь введи <b>второй тикер</b> (знаменатель):\n"
         "Например: <code>xautusdt</code>",
         parse_mode='HTML'
@@ -266,7 +277,7 @@ async def symbol2_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получаем второй тикер"""
     context.user_data['symbol2'] = update.message.text.strip().lower()
     await update.message.reply_text(
-        "✅ Принято!\n\n"
+        "✅ Шаг 2/5 - второй тикер принят!\n\n"
         "Теперь введи <b>пороговое отношение</b>:\n"
         "Например: <code>1.0048</code>",
         parse_mode='HTML'
@@ -279,7 +290,7 @@ async def threshold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threshold = float(update.message.text.strip())
         context.user_data['threshold'] = threshold
         await update.message.reply_text(
-            "✅ Принято!\n\n"
+            "✅ Шаг 3/5 - порог принят!\n\n"
             "Теперь введи <b>интервал проверки</b> в секундах:\n"
             "Например: <code>60</code>",
             parse_mode='HTML'
@@ -292,53 +303,120 @@ async def threshold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return THRESHOLD
 
 async def interval_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем интервал и запускаем"""
+    """Получаем интервал"""
     try:
         interval = int(update.message.text.strip())
-        chat_id = update.effective_chat.id
-        symbol1 = context.user_data['symbol1']
-        symbol2 = context.user_data['symbol2']
-        threshold = context.user_data['threshold']
+        context.user_data['interval'] = interval
         
-        # Сохраняем в данные пользователя
-        if str(chat_id) not in user_data:
-            user_data[str(chat_id)] = {'monitors': []}
-        
-        monitor_config = {
-            'symbol1': symbol1,
-            'symbol2': symbol2,
-            'threshold': threshold,
-            'interval': interval,
-            'created': datetime.now().isoformat()
-        }
-        user_data[str(chat_id)]['monitors'].append(monitor_config)
-        save_user_data(user_data)
-        
-        # Запускаем монитор
-        if chat_id in active_monitors:
-            active_monitors[chat_id].stop()
-        
-        monitor = PriceMonitor(chat_id, symbol1, symbol2, threshold, interval, context.application)
-        active_monitors[chat_id] = monitor
-        monitor.start()
+        # Спрашиваем, куда отправлять уведомления
+        keyboard = [
+            [InlineKeyboardButton("👤 Себе", callback_data='receiver_self')],
+            [InlineKeyboardButton("📱 Другой пользователь", callback_data='receiver_other')],
+            [InlineKeyboardButton("👥 Группа", callback_data='receiver_group')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ <b>Мониторинг запущен!</b>\n\n"
-            f"📊 {symbol1.upper()}/{symbol2.upper()}\n"
-            f"🎯 Порог: {threshold}\n"
-            f"⏱ Интервал: {interval}с",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ В меню", callback_data='back_to_menu')
-            ]])
+            "✅ Шаг 4/5 - интервал принят!\n\n"
+            "📨 <b>Куда отправлять уведомления?</b>\n"
+            "Выбери вариант:",
+            reply_markup=reply_markup,
+            parse_mode='HTML'
         )
-        return ConversationHandler.END
-        
+        return RECEIVER_TYPE
     except ValueError:
         await update.message.reply_text(
             "❌ Пожалуйста, введи целое число (например 60)"
         )
         return INTERVAL
+
+async def receiver_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор получателя"""
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = update.effective_chat.id
+    
+    if query.data == 'receiver_self':
+        # Отправляем себе
+        context.user_data['receiver_id'] = chat_id
+        await finalize_monitor(update, context)
+        return ConversationHandler.END
+    
+    elif query.data in ['receiver_other', 'receiver_group']:
+        context.user_data['receiver_type'] = query.data
+        await query.edit_message_text(
+            "📝 Введи <b>Chat ID</b> получателя:\n\n"
+            "• Для пользователя: найди его Chat ID через @userinfobot\n"
+            "• Для группы: добавь бота в группу и найди Chat ID в логах\n\n"
+            "Пример: <code>123456789</code>",
+            parse_mode='HTML'
+        )
+        return RECEIVER_ID
+
+async def receiver_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получаем Chat ID получателя"""
+    try:
+        receiver_id = int(update.message.text.strip())
+        context.user_data['receiver_id'] = receiver_id
+        await finalize_monitor(update, context)
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверный формат. Chat ID должен быть числом.\n"
+            "Пример: <code>123456789</code>",
+            parse_mode='HTML'
+        )
+        return RECEIVER_ID
+
+async def finalize_monitor(update, context):
+    """Завершает настройку и запускает монитор"""
+    chat_id = update.effective_chat.id
+    symbol1 = context.user_data['symbol1']
+    symbol2 = context.user_data['symbol2']
+    threshold = context.user_data['threshold']
+    interval = context.user_data['interval']
+    receiver_id = context.user_data.get('receiver_id', chat_id)
+    
+    # Сохраняем в данные пользователя
+    monitor_config = {
+        'symbol1': symbol1,
+        'symbol2': symbol2,
+        'threshold': threshold,
+        'interval': interval,
+        'receiver_id': receiver_id,
+        'created': datetime.now().isoformat()
+    }
+    
+    if str(chat_id) not in user_data:
+        user_data[str(chat_id)] = {'monitors': []}
+    
+    user_data[str(chat_id)]['monitors'].append(monitor_config)
+    save_user_data(user_data)
+    
+    # Запускаем монитор
+    if chat_id in active_monitors:
+        active_monitors[chat_id].stop()
+    
+    monitor = PriceMonitor(chat_id, receiver_id, symbol1, symbol2, threshold, interval, context.application)
+    active_monitors[chat_id] = monitor
+    monitor.start()
+    
+    # Сообщение о запуске
+    receiver_text = f"<code>{receiver_id}</code>" if receiver_id != chat_id else "👤 Себе"
+    
+    await update.message.reply_text(
+        f"✅ <b>Мониторинг запущен!</b>\n\n"
+        f"📊 {symbol1.upper()}/{symbol2.upper()}\n"
+        f"🎯 Порог: {threshold}\n"
+        f"⏱ Интервал: {interval}с\n"
+        f"📨 Получатель: {receiver_text}\n\n"
+        f"При достижении порога уведомление придет указанному получателю.",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ В меню", callback_data='back_to_menu')
+        ]])
+    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена"""
@@ -358,7 +436,7 @@ def main():
     # Обработчики команд
     app.add_handler(CommandHandler("start", start))
     
-    # Обработчик кнопок
+    # Обработчик кнопок (кроме add_pair)
     app.add_handler(CallbackQueryHandler(button_handler, pattern='^(?!add_pair$).*'))
     
     # ConversationHandler для добавления пары
@@ -369,6 +447,8 @@ def main():
             SYMBOL2: [MessageHandler(filters.TEXT & ~filters.COMMAND, symbol2_handler)],
             THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, threshold_handler)],
             INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, interval_handler)],
+            RECEIVER_TYPE: [CallbackQueryHandler(receiver_type_handler)],
+            RECEIVER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receiver_id_handler)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
