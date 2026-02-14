@@ -174,28 +174,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопок"""
+    """Обработчик кнопок главного меню"""
     query = update.callback_query
     await query.answer()
     
     chat_id = update.effective_chat.id
+    print(f"🔍 Нажата кнопка в меню: {query.data}")  # Для отладки
     
     if query.data == 'add_pair':
+        # Начинаем добавление новой пары
         await query.edit_message_text(
-            "📝 <b>Добавление пары - шаг 1/5</b>\n\n"
+            "📝 <b>Добавление новой пары - шаг 1/4</b>\n\n"
             "Введи <b>первый тикер</b> (числитель):\n"
             "Например: <code>paxgusdt</code>",
             parse_mode='HTML'
         )
-        return SYMBOL1
+        return SYMBOL1  # Возвращаем следующее состояние
     
     elif query.data == 'list_pairs':
+        # Показываем список пар
         if str(chat_id) in user_data and user_data[str(chat_id)]['monitors']:
             text = "📋 <b>Твои пары:</b>\n\n"
             for i, mon in enumerate(user_data[str(chat_id)]['monitors'], 1):
                 text += f"{i}. {mon['symbol1'].upper()}/{mon['symbol2'].upper()}\n"
                 text += f"   Порог: {mon['threshold']}, интервал: {mon['interval']}с\n"
-                text += f"   Получатель: <code>{mon['receiver_id']}</code>\n\n"
+                if 'receiver_id' in mon:
+                    text += f"   Получатель: <code>{mon['receiver_id']}</code>\n\n"
             
             keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -209,6 +213,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     elif query.data == 'stop_all':
+        # Останавливаем все мониторы
         if chat_id in active_monitors:
             active_monitors[chat_id].stop()
             del active_monitors[chat_id]
@@ -227,6 +232,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     elif query.data == 'help':
+        # Показываем помощь
         help_text = (
             "ℹ️ <b>Как пользоваться:</b>\n\n"
             "1. Нажми 'Добавить пару'\n"
@@ -235,9 +241,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "4. Введи пороговое отношение (например 1.0048)\n"
             "5. Введи интервал проверки в секундах\n"
             "6. Выбери, куда отправлять уведомления:\n"
-            "   • Себе (текущий чат)\n"
-            "   • Другой пользователь (введи Chat ID)\n"
-            "   • Группа (введи Chat ID группы)\n\n"
+            "   • Себе\n"
+            "   • Другой пользователь (введи Chat ID)\n\n"
             "Бот будет проверять каждые N секунд и пришлет сигнал указанному получателю."
         )
         await query.edit_message_text(
@@ -249,6 +254,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif query.data == 'back_to_menu':
+        # Возвращаемся в главное меню
         keyboard = [
             [InlineKeyboardButton("📊 Добавить пару", callback_data='add_pair')],
             [InlineKeyboardButton("📋 Мои пары", callback_data='list_pairs')],
